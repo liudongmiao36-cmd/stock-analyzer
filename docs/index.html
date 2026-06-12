@@ -117,7 +117,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- Header -->
   <div class="header">
-    <div class="logo">📈 股票分析</div>
+    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v3</span></div>
     <div class="add-bar">
       <input v-model="addCode" @keydown.enter="addStock" placeholder="输入6位股票代码，按回车添加（如 600519）" />
       <button class="btn btn-primary" @click="addStock">添加</button>
@@ -376,15 +376,12 @@ async function fetchKline(symbol, limit=250) {
   try {
     console.log('[fetchKline] fetch:', fullUrl);
     const r = await fetch(fullUrl);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
     text = await r.text();
     console.log('[fetchKline] direct ok, preview:', text.slice(0,80));
   } catch(e) {
-    console.warn('[fetchKline] direct failed, trying proxy:', e.message);
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(fullUrl)}`;
-    const r = await fetch(proxy);
-    const json = await r.json();
-    text = json.contents;
-    console.log('[fetchKline] proxy ok, preview:', text ? text.slice(0,80) : 'null');
+    console.warn('[fetchKline] direct failed:', e.message, '- no fallback, check network');
+    throw new Error(`无法获取行情数据，请检查网络连接。\n原因: ${e.message}\nURL: ${fullUrl.slice(0,80)}`);
   }
 
   // Response: kline_dayqfq2026={...}  — find ={ and parse from {
