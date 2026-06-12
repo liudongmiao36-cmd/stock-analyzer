@@ -90,6 +90,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .ind-tab.act{color:#58a6ff;border-bottom-color:#58a6ff}
 .sep{color:#30363d}
 
+.chart-wrap{position:relative;width:100%;min-height:100px}
+.chart-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;gap:8px;background:#0d1117;z-index:10;color:#8b949e;font-size:12px}
 #chart{width:100%;height:520px}
 
 /* Analysis */
@@ -223,8 +225,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       </div>
 
       <!-- Chart -->
-      <div v-if="loading" class="loading"><div class="spin"></div>正在加载行情数据...</div>
-      <div id="chart" v-show="!loading"></div>
+      <div class="chart-wrap">
+        <div v-show="loading" class="chart-loading"><div class="spin"></div>正在加载行情数据...</div>
+        <div id="chart"></div>
+      </div>
 
       <!-- AI Analysis -->
       <div class="analysis">
@@ -360,28 +364,32 @@ function getExchangePrefix(sym) {
 async function fetchKline(symbol, limit=250) {
   const prefix = getExchangePrefix(symbol);
   const full = prefix + symbol;
-  const end = new Date();
-  const start = new Date(end - limit*2*86400000);
-  const fmt = d => d.toISOString().slice(0,10).replace(/-/g,'');
-  const url = `https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?_var=kline_dayqfq&param=${full},day,${fmt(start)},${fmt(end)},${limit},qfq`;
+  const now = new Date();
+  const year = now.getFullYear();
+  const startYear = year - 1;
+  const varName = `kline_dayqfq${year}`;
+  const apiUrl = `https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get`;
+  const paramStr = `${full},day,${startYear}-01-01,${year+1}-12-31,${Math.max(limit,640)},qfq`;
+  const fullUrl = `${apiUrl}?_var=${varName}&param=${encodeURIComponent(paramStr)}&r=${Math.random()}`;
 
   let text;
   try {
-    const r = await fetch(url);
+    const r = await fetch(fullUrl);
     text = await r.text();
   } catch(e) {
-    // CORS fallback via proxy
-    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`;
+    const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(fullUrl)}`;
     const r = await fetch(proxy);
     const json = await r.json();
     text = json.contents;
   }
 
-  // Response: var kline_dayqfq={...} or plain JSON
-  const jsonStr = text.replace(/^var \w+=/, '').trim();
-  const data = JSON.parse(jsonStr);
+  // Response: kline_dayqfq2025={...}  — find ={ and parse from {
+  const eqIdx = text.indexOf('={');
+  if (eqIdx < 0) throw new Error(`${symbol} 数据格式异常`);
+  const data = JSON.parse(text.slice(eqIdx + 1));
+  if (!data.data || !data.data[full]) throw new Error(`${symbol} 暂无数据（${data.msg || '未知错误'}）`);
   const stockData = data.data[full];
-  const rows = stockData.qfqday || stockData.day || [];
+  const rows = stockData.qfqday || stockData.day || stockData.hfqday || [];
 
   // Each row: [date, open, close, high, low, volume]
   const result = rows.slice(-limit).map(r => ({
