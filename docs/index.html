@@ -104,6 +104,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .report p{margin-bottom:5px}.report ul{padding-left:16px;margin-bottom:5px}.report li{margin-bottom:3px}
 .warn{color:#f85149}
 .hint{color:#8b949e;font-size:13px;text-align:center;padding:30px 16px}
+.local-report h4{color:#58a6ff;margin:14px 0 6px;font-size:13px}
+.local-report ul{padding-left:18px;margin:4px 0}
+.local-report li{font-size:12px;line-height:1.8;color:#c9d1d9}
+.local-report .rec{padding:8px 12px;border-radius:6px;font-size:13px;margin:8px 0}
+.local-report .rec.bull{background:#0d2818;border:1px solid #238636;color:#3fb950}
+.local-report .rec.bear{background:#2d1117;border:1px solid #da3633;color:#f85149}
+.local-report .rec.neutral{background:#1c2128;border:1px solid #444c56;color:#c9d1d9}
 
 /* Loading */
 .loading{display:flex;align-items:center;gap:8px;color:#8b949e;font-size:12px;padding:20px 16px}
@@ -117,7 +124,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- Header -->
   <div class="header">
-    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v3</span></div>
+    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v4</span></div>
     <div class="add-bar">
       <input v-model="addCode" @keydown.enter="addStock" placeholder="输入6位股票代码，按回车添加（如 600519）" />
       <button class="btn btn-primary" @click="addStock">添加</button>
@@ -767,14 +774,125 @@ createApp({
       savePositions(selected.value);
     }
 
+    // ─── Local rule-based analysis (always works, no API needed) ───────────────
+    function localAnalysis(symbol, name, latest, sr, positions) {
+      const l = latest;
+      const fmt = (v, d=2) => v != null ? v.toFixed(d) : 'N/A';
+      const score = { bull: 0, bear: 0 };
+      const details = [];
+
+      // EMA arrangement
+      const emas = [l.ema5, l.ema10, l.ema20, l.ema60].filter(v => v != null);
+      if (emas.length >= 3) {
+        const bull = emas.every((v, i) => i === 0 || emas[i-1] >= v);
+        const bear = emas.every((v, i) => i === 0 || emas[i-1] <= v);
+        if (bull) { score.bull += 2; details.push('✅ 均线多头排列（EMA5>EMA10>EMA20>EMA60），趋势向上'); }
+        else if (bear) { score.bear += 2; details.push('⚠️ 均线空头排列（EMA5<EMA10<EMA20<EMA60），趋势向下'); }
+        else { details.push(`➡️ 均线排列混乱，震荡格局。EMA5:${fmt(l.ema5)} EMA20:${fmt(l.ema20)} EMA60:${fmt(l.ema60)}`); }
+      }
+
+      // Price vs EMA20
+      if (l.price && l.ema20) {
+        if (l.price > l.ema20) { score.bull += 1; details.push(`✅ 价格(${fmt(l.price)}) 站上 EMA20(${fmt(l.ema20)})，中期偏强`); }
+        else { score.bear += 1; details.push(`⚠️ 价格(${fmt(l.price)}) 跌破 EMA20(${fmt(l.ema20)})，中期偏弱`); }
+      }
+
+      // MACD
+      if (l.macd != null && l.signal != null) {
+        const aboveZero = l.macd > 0;
+        const golden = l.macd > l.signal;
+        const histDir = l.hist > 0 ? '放大' : '收缩';
+        if (golden && aboveZero) { score.bull += 2; details.push(`✅ MACD 零轴上方金叉（MACD:${fmt(l.macd,3)}，柱状${histDir}），多头强势`); }
+        else if (golden && !aboveZero) { score.bull += 1; details.push(`🔶 MACD 零轴下方金叉（${fmt(l.macd,3)}），回升信号，需确认突破零轴`); }
+        else if (!golden && !aboveZero) { score.bear += 2; details.push(`⚠️ MACD 零轴下方死叉（${fmt(l.macd,3)}），空头压制`); }
+        else { score.bear += 1; details.push(`⚠️ MACD 零轴上方死叉（${fmt(l.macd,3)}），强势减弱，注意调整`); }
+      }
+
+      // RSI
+      if (l.rsi14 != null) {
+        if (l.rsi14 > 75) { score.bear += 2; details.push(`🔴 RSI14=${fmt(l.rsi14,1)} 超买区（>75），短期有回调压力`); }
+        else if (l.rsi14 > 60) { score.bull += 1; details.push(`✅ RSI14=${fmt(l.rsi14,1)} 强势区（60-75），上涨动能充足`); }
+        else if (l.rsi14 < 25) { score.bull += 2; details.push(`🟢 RSI14=${fmt(l.rsi14,1)} 超卖区（<25），存在超跌反弹机会`); }
+        else if (l.rsi14 < 40) { score.bear += 1; details.push(`⚠️ RSI14=${fmt(l.rsi14,1)} 弱势区（40以下），做多需谨慎`); }
+        else { details.push(`➡️ RSI14=${fmt(l.rsi14,1)} 中性区（40-60），方向未明`); }
+      }
+
+      // KDJ
+      if (l.kdj_k != null && l.kdj_d != null) {
+        const j = l.kdj_j ?? 0;
+        if (l.kdj_k > l.kdj_d && l.kdj_k < 80) { score.bull += 1; details.push(`✅ KDJ 金叉（K:${fmt(l.kdj_k,0)} D:${fmt(l.kdj_d,0)}），短线向好`); }
+        else if (l.kdj_k < l.kdj_d && l.kdj_k > 20) { score.bear += 1; details.push(`⚠️ KDJ 死叉（K:${fmt(l.kdj_k,0)} D:${fmt(l.kdj_d,0)}），短线偏弱`); }
+        if (j > 90) { score.bear += 1; details.push(`🔴 KDJ J值=${fmt(j,0)} 极度超买，短期警惕急速回落`); }
+        if (j < 10) { score.bull += 1; details.push(`🟢 KDJ J值=${fmt(j,0)} 极度超卖，短期反弹概率较大`); }
+      }
+
+      // Bollinger Bands
+      if (l.bb_upper && l.bb_lower && l.bb_mid) {
+        const pos = (l.price - l.bb_lower) / (l.bb_upper - l.bb_lower);
+        const width = (l.bb_upper - l.bb_lower) / l.bb_mid;
+        const bandNote = width < 0.1 ? '（布林带收口，即将变盘）' : width > 0.2 ? '（布林带开口，趋势延续）' : '';
+        if (pos > 0.85) { score.bear += 1; details.push(`⚠️ 价格靠近布林上轨(${fmt(l.bb_upper)})${bandNote}，短线有压力`); }
+        else if (pos < 0.15) { score.bull += 1; details.push(`🟢 价格靠近布林下轨(${fmt(l.bb_lower)})${bandNote}，超跌可关注`); }
+        else { details.push(`➡️ 价格位于布林带 ${(pos*100).toFixed(0)}% 位置，中位运行${bandNote}`); }
+      }
+
+      // Support / Resistance
+      if (sr && (sr.support?.length || sr.resistance?.length)) {
+        const sup = sr.support?.slice(-2).map(v => fmt(v)).join(' / ') || '无';
+        const res = sr.resistance?.slice(-2).map(v => fmt(v)).join(' / ') || '无';
+        details.push(`📊 关键支撑: ${sup}；压力: ${res}`);
+      }
+
+      // Positions P&L
+      let posHtml = '';
+      if (positions.length) {
+        const posLines = positions.map(pos => {
+          const pnl = l.price ? (l.price - pos.cost) / pos.cost * 100 : null;
+          const pnlStr = pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%` : 'N/A';
+          const advice = pnl == null ? '' : pnl > 20 ? '（可考虑分批止盈）' : pnl < -10 ? '（关注止损位）' : '';
+          return `<li>成本 ¥${pos.cost}，持仓 ${pos.qty} 股，当前浮盈 <b>${pnlStr}</b>${advice}</li>`;
+        });
+        posHtml = `<h4>💼 持仓分析</h4><ul>${posLines.join('')}</ul>`;
+      }
+
+      // Overall recommendation
+      const total = score.bull + score.bear;
+      let recommend, recClass;
+      const bullRatio = total > 0 ? score.bull / total : 0.5;
+      if (bullRatio >= 0.7) { recommend = '📈 综合偏多，可适量持有或逢低加仓，注意量能配合'; recClass = 'bull'; }
+      else if (bullRatio <= 0.3) { recommend = '📉 综合偏空，建议轻仓或观望，等待信号改善'; recClass = 'bear'; }
+      else { recommend = '↔️ 多空均衡，建议观望为主，突破后跟进'; recClass = 'neutral'; }
+
+      const today = new Date().toLocaleDateString('zh-CN');
+      return `<div class="local-report">
+<p style="color:#8b949e;font-size:12px;margin-bottom:12px">📊 本地规则分析 · ${today}（Claude API 不可用时自动生成）</p>
+<h4>⚡ ${name}（${symbol}）技术面综合评分：多 ${score.bull} / 空 ${score.bear}</h4>
+<p class="rec ${recClass}"><b>${recommend}</b></p>
+<h4>📋 各指标详情</h4>
+<ul>${details.map(d => `<li>${d}</li>`).join('')}</ul>
+${posHtml}
+<p style="color:#8b949e;font-size:11px;margin-top:16px">⚠️ 以上为纯技术面规则分析，不构成投资建议。如需 AI 深度解读，请配置 Anthropic API Key 并确保网络可访问 api.anthropic.com。</p>
+</div>`;
+    }
+
     // AI Analysis
     async function runAnalysis() {
-      if (!apiKey.value) { alert('请先在侧边栏顶部填入 Anthropic API Key'); showKeySetup.value=true; return; }
       if (!klineData.value) { alert('请先加载股票数据'); return; }
       aiLoading.value = true;
       try {
-        const prompt = buildPrompt(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
-        const result = await callClaude(apiKey.value, prompt);
+        let result;
+        if (apiKey.value) {
+          try {
+            const prompt = buildPrompt(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
+            result = await callClaude(apiKey.value, prompt);
+          } catch(e) {
+            console.warn('Claude API failed, falling back to local analysis:', e.message);
+            result = localAnalysis(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
+            result = `<p style="color:#f0b429;font-size:12px;margin-bottom:8px">⚠️ Claude API 无法连接（${e.message}），已切换为本地规则分析</p>` + result;
+          }
+        } else {
+          result = localAnalysis(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
+        }
         report.value = result;
         reportDate.value = new Date().toISOString().slice(0,10);
         localStorage.setItem(`report_${selected.value}`, JSON.stringify({date:reportDate.value, report:result}));
