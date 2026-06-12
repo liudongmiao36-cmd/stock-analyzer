@@ -124,21 +124,21 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- Header -->
   <div class="header">
-    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v6</span></div>
+    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v7</span></div>
     <div class="add-bar">
       <input v-model="addCode" @keydown.enter="addStock" placeholder="输入6位股票代码，按回车添加（如 600519）" />
       <button class="btn btn-primary" @click="addStock">添加</button>
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
-      <span v-if="apiKey" style="font-size:11px;color:#3fb950">● API已配置</span>
-      <span v-else style="font-size:11px;color:#f85149">● 未配置API Key</span>
+      <span v-show="apiKey" style="font-size:11px;color:#3fb950">● API已配置</span>
+      <span v-show="!apiKey" style="font-size:11px;color:#f85149">● 未配置API Key</span>
     </div>
   </div>
 
   <!-- Sidebar -->
   <div class="sidebar">
     <!-- API Key Setup -->
-    <div class="key-banner" v-if="showKeySetup">
+    <div class="key-banner" v-show="showKeySetup">
       <p style="font-size:11px;color:#8b949e;margin-bottom:6px">Anthropic API Key（仅存本地，不上传）</p>
       <div class="key-input-row">
         <input v-model="keyInput" type="password" placeholder="sk-ant-..." @keydown.enter="saveKey" />
@@ -152,7 +152,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
         <a href="https://vercel.com/new" target="_blank" style="font-size:10px;color:#58a6ff;margin-left:8px">获取免费代理→</a>
       </div>
     </div>
-    <div v-else style="padding:5px 12px 0;display:flex;justify-content:space-between;align-items:center">
+    <div v-show="!showKeySetup" style="padding:5px 12px 0;display:flex;justify-content:space-between;align-items:center">
       <span style="font-size:10px;color:#555">{{proxyUrl?'✅ 已配置代理':'⚠️ 直连模式'}}</span>
       <button class="btn-icon" @click="showKeySetup=true;keyInput=apiKey;proxyInput=proxyUrl" title="修改设置">⚙️ 修改</button>
     </div>
@@ -179,8 +179,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       <span>持仓记录</span>
       <button v-if="selected" class="btn btn-secondary btn-sm" @click="openAdd">+ 添加</button>
     </div>
-    <div v-if="!selected" style="padding:8px 12px;font-size:12px;color:#8b949e">先选择股票</div>
-    <div v-else-if="!positions.length" style="padding:8px 12px;font-size:12px;color:#8b949e">暂无持仓记录</div>
+    <div v-show="!selected" style="padding:8px 12px;font-size:12px;color:#8b949e">先选择股票</div>
+    <div v-show="selected && !positions.length" style="padding:8px 12px;font-size:12px;color:#8b949e">暂无持仓记录</div>
     <div v-for="p in positions" :key="p.id" class="pos-item">
       <div class="pos-row"><span class="pos-label">成本价</span><span>¥{{p.cost}} × {{p.qty}}股</span></div>
       <div class="pos-row">
@@ -198,18 +198,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- Main -->
   <div class="main" id="main-scroll">
-    <div v-if="!selected" class="empty">
+    <div v-show="!selected" class="empty">
       <div class="ico">📊</div>
       <p>在左侧输入股票代码开始分析</p>
       <p style="font-size:11px">支持A股和ETF，数据来自腾讯财经</p>
     </div>
 
-    <template v-else>
+    <div v-show="selected">
       <!-- Stock header -->
       <div class="stock-hd">
         <div><div class="hd-name">{{curStock.name}}</div><div class="hd-code">{{selected}}</div></div>
         <div class="hd-price" :class="priceClass(curStock)">{{curStock.price||'--'}}</div>
-        <div v-if="curStock.price" class="hd-badge" :class="(curStock.change||0)>=0?'badge-up':'badge-down'">
+        <div v-show="curStock.price" class="hd-badge" :class="(curStock.change||0)>=0?'badge-up':'badge-down'">
           {{(curStock.change||0)>=0?'+':''}}{{curStock.changeStr||'0.00%'}}
         </div>
         <div class="hd-right">
@@ -220,7 +220,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
       </div>
 
       <!-- Signal chips -->
-      <div class="signals" v-if="signals.length">
+      <div class="signals" v-show="signals.length">
         <div class="chip" v-for="s in signals" :key="s.label">
           <div class="dot" :class="s.dir===1?'dot-up':s.dir===-1?'dot-down':'dot-neu'"></div>
           <span>{{s.label}}: <b :class="s.dir===1?'up':s.dir===-1?'down':'flat'">{{s.value}}</b></span>
@@ -250,18 +250,18 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
         <div class="analysis-hd">
           <h3>AI 技术分析</h3>
           <div style="display:flex;align-items:center;gap:8px">
-            <span class="analysis-meta" v-if="reportDate">{{reportDate}} 生成</span>
+            <span v-show="reportDate" class="analysis-meta">{{reportDate}} 生成</span>
             <button class="btn btn-primary btn-sm" @click="runAnalysis" :disabled="aiLoading||loading">
               {{aiLoading?'分析中...':reportDate?'重新分析':'生成分析'}}
             </button>
           </div>
         </div>
-        <div v-if="aiLoading" class="loading"><div class="spin"></div>Claude 正在综合分析技术面，请稍候...</div>
-        <div v-else-if="report" class="report" v-html="report"></div>
-        <div v-else class="hint">点击「生成分析」，Claude 将结合所有技术指标和你的持仓成本，给出专业分析思路。<br><br>
+        <div v-show="aiLoading" class="loading"><div class="spin"></div>Claude 正在综合分析技术面，请稍候...</div>
+        <div v-show="!aiLoading && report" class="report" v-html="report"></div>
+        <div v-show="!aiLoading && !report" class="hint">点击「生成分析」，Claude 将结合所有技术指标和你的持仓成本，给出专业分析思路。<br><br>
         <span style="color:#f85149;font-size:11px">⚠️ 需先配置 Anthropic API Key（侧边栏顶部）</span></div>
       </div>
-    </template>
+    </div>
   </div>
 </div>
 
