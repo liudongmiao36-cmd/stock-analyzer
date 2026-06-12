@@ -124,7 +124,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- Header -->
   <div class="header">
-    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v5</span></div>
+    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v6</span></div>
     <div class="add-bar">
       <input v-model="addCode" @keydown.enter="addStock" placeholder="输入6位股票代码，按回车添加（如 600519）" />
       <button class="btn btn-primary" @click="addStock">添加</button>
@@ -522,6 +522,46 @@ function buildPrompt(symbol, name, klineData, positions) {
   const vol20 = vols.slice(-20).reduce((a,b)=>a+b,0)/20;
   const volTrend = vol20 > 0 ? `近5日均量是20日均量的${(vol5/vol20).toFixed(2)}倍` : '';
 
+  // ── Chip / large-money analysis ──────────────────────────────────────────
+  // VWAP helper: typical price * volume weighted average
+  const vwap = (slice) => {
+    let pv = 0, v = 0;
+    slice.forEach(r => { const tp = (r.high + r.low + r.close) / 3; pv += tp * r.volume; v += r.volume; });
+    return v > 0 ? pv / v : null;
+  };
+  const vwap5  = vwap(rows.slice(-5));
+  const vwap20 = vwap(rows.slice(-20));
+  const vwap60 = vwap(rows.slice(-60));
+
+  // High-volume days (last 60): volume > 1.8x 60-day average
+  const last60 = rows.slice(-60);
+  const vol60avg = last60.reduce((a, r) => a + r.volume, 0) / last60.length;
+  const bigVolDays = last60
+    .map((r, i) => ({ ...r, ratio: r.volume / vol60avg }))
+    .filter(r => r.ratio >= 1.8)
+    .sort((a, b) => b.ratio - a.ratio)
+    .slice(0, 8);
+  const bigVolTable = bigVolDays.length
+    ? bigVolDays.map(r => `  ${r.date} 收¥${r.close} 量比${r.ratio.toFixed(1)}x ${r.close >= r.open ? '▲阳' : '▼阴'} 高${r.high} 低${r.low}`).join('\n')
+    : '  近60日无明显大量异动';
+
+  // Price-volume clusters: bucket prices into 15 bins, sum volume per bin
+  const allRows60 = rows.slice(-60);
+  const minP = Math.min(...allRows60.map(r => r.low));
+  const maxP = Math.max(...allRows60.map(r => r.high));
+  const bins = 15;
+  const binSize = (maxP - minP) / bins;
+  const buckets = Array.from({length: bins}, (_, i) => ({
+    lo: minP + i * binSize, hi: minP + (i+1) * binSize, vol: 0
+  }));
+  allRows60.forEach(r => {
+    const mid = (r.high + r.low + r.close) / 3;
+    const bi = Math.min(bins - 1, Math.floor((mid - minP) / binSize));
+    if (bi >= 0) buckets[bi].vol += r.volume;
+  });
+  const topBuckets = [...buckets].sort((a, b) => b.vol - a.vol).slice(0, 4);
+  const chipZones = topBuckets.map(b => `¥${b.lo.toFixed(2)}~${b.hi.toFixed(2)}`).join('、');
+
   // Support / Resistance with distance
   const distFmt = (v) => {
     const d = ((v - p.price) / p.price * 100).toFixed(1);
@@ -582,6 +622,14 @@ ${candleRows}
 - ${volTrend}
 - 近3日量能: ${vols.slice(-3).map(v=>(v/10000).toFixed(0)+'万').join('、')}
 
+## 筹码与大资金分析
+- VWAP5（近5日成本均价）: ¥${vwap5 ? fmt(vwap5) : 'N/A'}
+- VWAP20（近20日成本均价）: ¥${vwap20 ? fmt(vwap20) : 'N/A'}
+- VWAP60（近60日成本均价）: ¥${vwap60 ? fmt(vwap60) : 'N/A'}
+- 近60日价格分布密集区（成交量最大的4个价格区间）: ${chipZones}
+- 近60日异动大量日（量比≥1.8x，按量比排序）:
+${bigVolTable}
+
 ## 关键价位
 - 阻力位（由近到远）: ${resInfo}
 - 支撑位（由近到远）: ${supInfo}
@@ -609,7 +657,29 @@ ${posSection}
 <h4>六、风险提示</h4>
 列出2-3个需要警惕的风险信号（什么情况出现则应该止损或回避），以及大盘环境对该股的可能影响。
 
-要求：专业、严谨、具体，给出明确价位不含糊，全文800-1200字。结尾注明"以上为技术分析参考，不构成投资建议，请结合基本面和市场环境综合判断，注意控制仓位风险。"`;
+---以下三项单独列出，不计入正文字数---
+
+<h4>【数据】大资金筹码成本位</h4>
+根据以上VWAP数据、异动大量日价格区间、价格密集成交区，推算大资金（机构/主力）可能的建仓成本区间。明确指出：
+①近期主力大概率的持仓成本区间（给出具体价格范围）
+②当前价格与主力成本的关系（主力是否盈利、是否在洗盘、是否在出货）
+③近60日哪几天的大量异动最值得关注，当天价格行为说明了什么
+
+<h4>【建议一】近期如何做T</h4>
+基于当前价格、均线、布林带上下轨、日内支撑压力，给出具体的T+0操作策略：
+①今日/近日买入参考价位区间（触及什么价格可以低吸）
+②今日/近日卖出参考价位区间（涨到什么价格可以高抛）
+③做T的前提条件（什么指标信号出现才适合做T，什么情况下不建议做T）
+④每次做T建议的仓位比例
+
+<h4>【建议二】未来五个交易日趋势概率预测</h4>
+综合所有指标，给出未来5个交易日三种情景的概率评估（概率之和=100%）：
+① 上涨概率: __% — 触发条件+目标价位
+② 横盘震荡概率: __% — 震荡区间
+③ 下跌概率: __% — 触发条件+支撑位
+并说明最可能出现的情景及其关键确认信号。
+
+要求：专业、严谨、具体，给出明确价位不含糊，正文六个板块合计800-1200字，三个附加板块各100-200字。全文结尾注明"以上为技术分析参考，不构成投资建议，请结合基本面和市场环境综合判断，注意控制仓位风险。"`;
 }
 
 // ─── Vue App ────────────────────────────────────────────────────────────────
