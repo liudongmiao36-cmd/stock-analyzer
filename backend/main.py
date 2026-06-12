@@ -44,3 +44,9 @@ async def serve_frontend():
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ping")
+async def ping():
+    # Keep-alive endpoint for Render free tier (use UptimeRobot to ping every 10 min)
+    return "pong"
