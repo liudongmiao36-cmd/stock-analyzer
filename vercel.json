@@ -1,7 +1,4 @@
 {
-  "functions": {
-    "api/claude.js": { "runtime": "edge" }
-  },
   "headers": [
     {
       "source": "/api/(.*)",
