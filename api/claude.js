@@ -17,8 +17,8 @@ export default async function handler(req) {
   }
 
   const apiKey = req.headers.get('x-api-key');
-  if (!apiKey || !apiKey.startsWith('sk-ant-')) {
-    return new Response(JSON.stringify({ error: { message: 'Invalid or missing Anthropic API key' } }), {
+  if (!apiKey) {
+    return new Response(JSON.stringify({ error: { message: 'Missing API key — please set your Anthropic API key in the app settings' } }), {
       status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
     });
   }
