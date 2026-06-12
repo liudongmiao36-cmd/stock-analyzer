@@ -1,0 +1,9 @@
+backend/
+frontend/
+requirements.txt
+runtime.txt
+Procfile
+render.yaml
+railway.json
+start.bat
+*.db
