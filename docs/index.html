@@ -124,7 +124,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 
   <!-- Header -->
   <div class="header">
-    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v4</span></div>
+    <div class="logo">📈 股票分析 <span style="font-size:10px;color:#555;font-weight:400">v5</span></div>
     <div class="add-bar">
       <input v-model="addCode" @keydown.enter="addStock" placeholder="输入6位股票代码，按回车添加（如 600519）" />
       <button class="btn btn-primary" @click="addStock">添加</button>
@@ -139,14 +139,22 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div class="sidebar">
     <!-- API Key Setup -->
     <div class="key-banner" v-if="showKeySetup">
-      <p>首次使用，请填入 Anthropic API Key（仅存储在本地浏览器）</p>
+      <p style="font-size:11px;color:#8b949e;margin-bottom:6px">Anthropic API Key（仅存本地，不上传）</p>
       <div class="key-input-row">
         <input v-model="keyInput" type="password" placeholder="sk-ant-..." @keydown.enter="saveKey" />
+      </div>
+      <p style="font-size:11px;color:#8b949e;margin:6px 0 4px">Vercel代理URL（中国用户必填，留空则直连）</p>
+      <div class="key-input-row">
+        <input v-model="proxyInput" type="text" placeholder="https://xxx.vercel.app" @keydown.enter="saveKey" />
+      </div>
+      <div style="margin-top:6px">
         <button class="btn btn-primary btn-sm" @click="saveKey">保存</button>
+        <a href="https://vercel.com/new" target="_blank" style="font-size:10px;color:#58a6ff;margin-left:8px">获取免费代理→</a>
       </div>
     </div>
-    <div v-else style="padding:5px 12px 0;display:flex;justify-content:flex-end">
-      <button class="btn-icon" @click="showKeySetup=true;keyInput=apiKey" title="修改API Key">⚙️ 修改Key</button>
+    <div v-else style="padding:5px 12px 0;display:flex;justify-content:space-between;align-items:center">
+      <span style="font-size:10px;color:#555">{{proxyUrl?'✅ 已配置代理':'⚠️ 直连模式'}}</span>
+      <button class="btn-icon" @click="showKeySetup=true;keyInput=apiKey;proxyInput=proxyUrl" title="修改设置">⚙️ 修改</button>
     </div>
 
     <div class="sec-title">自选股</div>
@@ -422,74 +430,186 @@ async function fetchKline(symbol, limit=250) {
 }
 
 // ─── Claude API (direct from browser) ──────────────────────────────────────
-async function callClaude(apiKey, prompt) {
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+async function callClaude(apiKey, prompt, proxyUrl) {
+  // proxyUrl: Vercel edge function URL for China users; fallback to direct API
+  const endpoint = proxyUrl
+    ? proxyUrl.replace(/\/$/, '') + '/api/claude'
+    : 'https://api.anthropic.com/v1/messages';
+  const headers = {
+    'Content-Type': 'application/json',
+    'x-api-key': apiKey,
+    'anthropic-version': '2023-06-01',
+  };
+  if (!proxyUrl) headers['anthropic-dangerous-allow-browser'] = 'true';
+  const res = await fetch(endpoint, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-allow-browser': 'true'
-    },
+    headers,
     body: JSON.stringify({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1500,
+      model: 'claude-opus-4-8',
+      max_tokens: 2500,
       messages: [{ role: 'user', content: prompt }]
     })
   });
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error?.message || `HTTP ${res.status}`);
   }
   const data = await res.json();
   return data.content[0].text;
 }
 
-function buildPrompt(symbol, name, latest, sr, positions) {
-  const p = latest, fmt = (v,d=2) => v!=null?v.toFixed(d):'N/A';
-  let pos_info = '';
-  if (positions.length) {
-    const lines = positions.map(x => {
-      const pnl = p.price ? (p.price-x.cost)/x.cost*100 : null;
-      return `- 成本¥${x.cost} × ${x.qty}股，浮盈: ${pnl!=null?(pnl>=0?'+':'')+pnl.toFixed(1)+'%':'N/A'}${x.note?'，备注:'+x.note:''}`;
-    });
-    pos_info = '\n## 持仓情况\n' + lines.join('\n');
+function buildPrompt(symbol, name, klineData, positions) {
+  const { rows, latest: p, e5, e10, e20, e60, e120, mac, rsi14, rsi6, kdj, bb, sr, vols } = klineData;
+  const fmt = (v, d=2) => v != null ? Number(v).toFixed(d) : 'N/A';
+  const n = rows.length - 1;
+
+  // Recent 20 candles table
+  const recent = rows.slice(-20);
+  const candleRows = recent.map((r, i) => {
+    const idx = n - 19 + i;
+    const vol20avg = vols.slice(Math.max(0, idx-19), idx+1).reduce((a,b)=>a+b,0) / Math.min(20, idx+1);
+    const volRatio = vol20avg > 0 ? (r.volume / vol20avg).toFixed(2) : '-';
+    const chg = i > 0 ? ((r.close - recent[i-1].close) / recent[i-1].close * 100).toFixed(2) : '-';
+    return `${r.date} | 开${r.open} 高${r.high} 低${r.low} 收${r.close} | 量${(r.volume/10000).toFixed(0)}万 量比${volRatio} | 涨跌${chg}%`;
+  }).join('\n');
+
+  // EMA trend (direction of last 5 days)
+  const emaSlice = (arr, name) => {
+    const vals = arr.slice(-5).filter(v => v != null);
+    if (vals.length < 2) return `${name}: N/A`;
+    const dir = vals[vals.length-1] > vals[0] ? '↑' : '↓';
+    return `${name}: ${fmt(vals[vals.length-1])} ${dir}`;
+  };
+
+  // MACD histogram trend (last 5)
+  const histSlice = mac.hist.slice(-5).filter(v => v != null);
+  const histTrend = histSlice.length >= 2
+    ? (Math.abs(histSlice[histSlice.length-1]) > Math.abs(histSlice[0]) ? '扩大' : '收缩')
+    : 'N/A';
+  const histSign = (p.hist ?? 0) >= 0 ? '红柱' : '绿柱';
+
+  // RSI trend
+  const rsi14Slice = rsi14.slice(-5).filter(v => v != null);
+  const rsiTrend = rsi14Slice.length >= 2
+    ? (rsi14Slice[rsi14Slice.length-1] > rsi14Slice[0] ? '↑上升' : '↓下降')
+    : '';
+
+  // KDJ cross detection (last 3 days)
+  const kArr = kdj.k.slice(-4).filter(v => v != null);
+  const dArr = kdj.d.slice(-4).filter(v => v != null);
+  let kdjCross = '无明显交叉';
+  if (kArr.length >= 2 && dArr.length >= 2) {
+    const prev = kArr[kArr.length-2] - dArr[dArr.length-2];
+    const curr = kArr[kArr.length-1] - dArr[dArr.length-1];
+    if (prev < 0 && curr >= 0) kdjCross = '🔔 最近发生金叉';
+    else if (prev > 0 && curr <= 0) kdjCross = '💀 最近发生死叉';
   }
 
-  return `你是专业A股技术分析师，请分析 ${name}（${symbol}）。
+  // Bollinger width trend
+  const bbWidths = bb.upper.slice(-10).map((u, i) => {
+    const l2 = bb.lower.slice(-10)[i], m2 = bb.middle.slice(-10)[i];
+    return u != null && l2 != null && m2 != null ? (u - l2) / m2 : null;
+  }).filter(v => v != null);
+  const bbWidthTrend = bbWidths.length >= 2
+    ? (bbWidths[bbWidths.length-1] > bbWidths[0] ? '开口扩大（趋势行情）' : '开口收窄（蓄势变盘）')
+    : '';
+  const bbPos = p.bb_upper && p.bb_lower
+    ? ((p.price - p.bb_lower) / (p.bb_upper - p.bb_lower) * 100).toFixed(0)
+    : 'N/A';
+
+  // Volume trend
+  const vol5 = vols.slice(-5).reduce((a,b)=>a+b,0)/5;
+  const vol20 = vols.slice(-20).reduce((a,b)=>a+b,0)/20;
+  const volTrend = vol20 > 0 ? `近5日均量是20日均量的${(vol5/vol20).toFixed(2)}倍` : '';
+
+  // Support / Resistance with distance
+  const distFmt = (v) => {
+    const d = ((v - p.price) / p.price * 100).toFixed(1);
+    return `¥${fmt(v)}（距${d}%）`;
+  };
+  const resInfo = sr.resistance.length ? sr.resistance.slice(0,4).map(distFmt).join('、') : '暂无';
+  const supInfo = sr.support.length ? sr.support.slice(-4).map(distFmt).join('、') : '暂无';
+
+  // Positions
+  let posSection = '';
+  if (positions.length) {
+    const lines = positions.map(pos => {
+      const pnl = p.price ? (p.price - pos.cost) / pos.cost * 100 : null;
+      const mktVal = p.price ? p.price * pos.qty : null;
+      const cost = pos.cost * pos.qty;
+      return `  - 成本¥${pos.cost} × ${pos.qty}股，市值¥${mktVal?mktVal.toFixed(0):'N/A'}，浮盈${pnl!=null?(pnl>=0?'+':'')+pnl.toFixed(2)+'%':'N/A'}（${pnl!=null?(((p.price-pos.cost)*pos.qty)>=0?'+':'')+'¥'+Math.round((p.price-pos.cost)*pos.qty).toLocaleString():'N/A'}）${pos.note?'  备注: '+pos.note:''}`;
+    });
+    posSection = `\n## 我的持仓\n${lines.join('\n')}`;
+  }
+
+  return `你是资深A股量化技术分析师，请对以下股票进行全面、专业、深入的技术分析。
+
+# ${name}（${symbol}）技术分析报告
 
 ## 最新行情
-- 价格: ${fmt(p.price)}  涨跌: ${p.changePct!=null?(p.changePct>=0?'+':'')+fmt(p.changePct)+'%':'N/A'}
+- 当前价: ¥${fmt(p.price)}  今日涨跌: ${p.changePct!=null?(p.changePct>=0?'+':'')+fmt(p.changePct)+'%':'N/A'}
+- 价格相对EMA20: ${p.price && p.ema20 ? ((p.price-p.ema20)/p.ema20*100).toFixed(2)+'%' : 'N/A'}
+- 价格相对EMA60: ${p.price && p.ema60 ? ((p.price-p.ema60)/p.ema60*100).toFixed(2)+'%' : 'N/A'}
 
-## 均线系统
-- EMA5: ${fmt(p.ema5)}  EMA10: ${fmt(p.ema10)}  EMA20: ${fmt(p.ema20)}  EMA60: ${fmt(p.ema60)}
+## 近20日K线数据（日期 | 开高低收 | 成交量/量比 | 涨跌）
+${candleRows}
 
-## MACD(12,26,9)
-- MACD: ${fmt(p.macd)}  Signal: ${fmt(p.signal)}  柱: ${fmt(p.hist)}
+## 均线系统（EMA）
+- ${emaSlice(e5,'EMA5')}  ${emaSlice(e10,'EMA10')}  ${emaSlice(e20,'EMA20')}
+- ${emaSlice(e60,'EMA60')}  ${emaSlice(e120,'EMA120')}
+- 均线排列: ${[p.ema5,p.ema10,p.ema20,p.ema60].every((v,i,a)=>i===0||a[i-1]>=v)?'多头排列':[p.ema5,p.ema10,p.ema20,p.ema60].every((v,i,a)=>i===0||a[i-1]<=v)?'空头排列':'混乱排列'}
+
+## MACD (12,26,9)
+- DIF(MACD线): ${fmt(p.macd,4)}  DEA(信号线): ${fmt(p.signal,4)}
+- 柱状图: ${fmt(p.hist,4)}（${histSign}，近5日${histTrend}）
+- 零轴位置: ${(p.macd??0) > 0 ? '零轴上方（多头区）' : '零轴下方（空头区）'}
+- 金叉/死叉: ${(p.macd??0) > (p.signal??0) ? '当前金叉状态' : '当前死叉状态'}
 
 ## RSI
-- RSI14: ${fmt(p.rsi14,1)}  RSI6: ${fmt(p.rsi6,1)}
+- RSI6: ${fmt(p.rsi6,1)}  RSI14: ${fmt(p.rsi14,1)} ${rsiTrend}
+- 状态: ${(p.rsi14??50)>80?'🔴严重超买':(p.rsi14??50)>70?'⚠️超买':(p.rsi14??50)<20?'🟢严重超卖':(p.rsi14??50)<30?'🟢超卖':'中性区'}
 
-## KDJ(9,3,3)
+## KDJ (9,3,3)
 - K: ${fmt(p.kdj_k,1)}  D: ${fmt(p.kdj_d,1)}  J: ${fmt(p.kdj_j,1)}
+- 状态: ${kdjCross}，${(p.kdj_j??50)>90?'J值极度超买':((p.kdj_j??50)<10?'J值极度超卖':'J值正常')}
 
-## 布林带(20,2)
-- 上轨: ${fmt(p.bb_upper)}  中轨: ${fmt(p.bb_mid)}  下轨: ${fmt(p.bb_lower)}
+## 布林带 (20,2)
+- 上轨: ${fmt(p.bb_upper)}  中轨(MA20): ${fmt(p.bb_mid)}  下轨: ${fmt(p.bb_lower)}
+- 当前位置: 布林带${bbPos}%处，${bbWidthTrend}
+- 价格位置: ${Number(bbPos)>85?'贴近上轨，短线压力':Number(bbPos)<15?'贴近下轨，短线支撑':'带内运行'}
+
+## 成交量
+- ${volTrend}
+- 近3日量能: ${vols.slice(-3).map(v=>(v/10000).toFixed(0)+'万').join('、')}
 
 ## 关键价位
-- 压力位: ${sr.resistance.length?sr.resistance.join(', '):'暂无'}
-- 支撑位: ${sr.support.length?sr.support.join(', '):'暂无'}
-${pos_info}
+- 阻力位（由近到远）: ${resInfo}
+- 支撑位（由近到远）: ${supInfo}
+${posSection}
 
-请用HTML格式输出（只用h4/p/ul/li，不加class）：
+---
 
-<h4>一、趋势判断</h4><p>...</p>
-<h4>二、指标信号</h4><ul><li>MACD: ...</li><li>RSI: ...</li><li>KDJ: ...</li><li>布林: ...</li></ul>
-<h4>三、关键价位</h4><p>...</p>
-<h4>四、操作思路</h4><p>结合持仓成本给出具体建议，如无持仓给入场参考位</p>
-<h4>五、风险提示</h4><p>...</p>
+请按以下结构输出完整分析报告（HTML格式，使用h4/p/ul/li标签，可适当使用<b>加粗重点）：
 
-要求：简洁专业，500字以内，末尾注明"以上为技术分析参考，不构成投资建议。"`;
+<h4>一、趋势研判</h4>
+分析当前所处趋势（上涨/下跌/震荡），综合均线系统判断主要趋势和次级趋势，说明目前处于趋势的哪个阶段。
+
+<h4>二、动量与超买超卖</h4>
+逐一分析MACD（柱状图变化趋势、金叉死叉有效性）、RSI（是否超买超卖、背离情况）、KDJ（交叉信号、极值区域），综合判断短期多空力量对比。
+
+<h4>三、布林带与波动率</h4>
+分析布林带收口/开口含义、价格在带内位置、近期波动率变化对后市的预示。
+
+<h4>四、量价关系</h4>
+分析成交量与价格的配合情况，判断上涨/下跌的量能支撑是否充分，是否存在量价背离。
+
+<h4>五、关键价位与操作策略</h4>
+明确标注：①近期最重要支撑位（若跌破则止损）②近期最重要压力位（突破则追多）③建议入场区间或加仓位置。${positions.length?'结合我的持仓成本，给出具体的加仓、减仓、止盈、止损建议（给出具体价位）。':'如当前无持仓，给出明确的首次入场建议（触发条件+入场价区间）。'}
+
+<h4>六、风险提示</h4>
+列出2-3个需要警惕的风险信号（什么情况出现则应该止损或回避），以及大盘环境对该股的可能影响。
+
+要求：专业、严谨、具体，给出明确价位不含糊，全文800-1200字。结尾注明"以上为技术分析参考，不构成投资建议，请结合基本面和市场环境综合判断，注意控制仓位风险。"`;
 }
 
 // ─── Vue App ────────────────────────────────────────────────────────────────
@@ -497,7 +617,9 @@ createApp({
   setup() {
     const addCode = ref('');
     const apiKey = ref(localStorage.getItem('ak_key') || '');
+    const proxyUrl = ref(localStorage.getItem('proxy_url') || '');
     const keyInput = ref('');
+    const proxyInput = ref(localStorage.getItem('proxy_url') || '');
     const showKeySetup = ref(!localStorage.getItem('ak_key'));
 
     const watchlist = ref(JSON.parse(localStorage.getItem('watchlist') || '[]'));
@@ -525,6 +647,9 @@ createApp({
       if (!keyInput.value.trim()) return;
       apiKey.value = keyInput.value.trim();
       localStorage.setItem('ak_key', apiKey.value);
+      proxyUrl.value = proxyInput.value.trim();
+      if (proxyUrl.value) localStorage.setItem('proxy_url', proxyUrl.value);
+      else localStorage.removeItem('proxy_url');
       showKeySetup.value = false;
     }
 
@@ -883,12 +1008,12 @@ ${posHtml}
         let result;
         if (apiKey.value) {
           try {
-            const prompt = buildPrompt(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
-            result = await callClaude(apiKey.value, prompt);
+            const prompt = buildPrompt(selected.value, curStock.name, klineData.value, positions.value);
+            result = await callClaude(apiKey.value, prompt, proxyUrl.value);
           } catch(e) {
             console.warn('Claude API failed, falling back to local analysis:', e.message);
             result = localAnalysis(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
-            result = `<p style="color:#f0b429;font-size:12px;margin-bottom:8px">⚠️ Claude API 无法连接（${e.message}），已切换为本地规则分析</p>` + result;
+            result = `<p style="color:#f0b429;font-size:12px;margin-bottom:8px">⚠️ Claude API 无法连接（${e.message}），已切换为本地规则分析。请检查：①代理URL是否正确 ②API Key是否有效</p>` + result;
           }
         } else {
           result = localAnalysis(selected.value, curStock.name, klineData.value.latest, klineData.value.sr, positions.value);
@@ -906,7 +1031,7 @@ ${posHtml}
     });
 
     return {
-      addCode, apiKey, keyInput, showKeySetup, saveKey,
+      addCode, apiKey, proxyUrl, keyInput, proxyInput, showKeySetup, saveKey,
       watchlist, selected, curStock, days, indTab, loading,
       klineData, signals, report, reportDate, aiLoading,
       positions, showModal, editId, form,
