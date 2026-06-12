@@ -374,20 +374,25 @@ async function fetchKline(symbol, limit=250) {
 
   let text;
   try {
+    console.log('[fetchKline] fetch:', fullUrl);
     const r = await fetch(fullUrl);
     text = await r.text();
+    console.log('[fetchKline] direct ok, preview:', text.slice(0,80));
   } catch(e) {
+    console.warn('[fetchKline] direct failed, trying proxy:', e.message);
     const proxy = `https://api.allorigins.win/get?url=${encodeURIComponent(fullUrl)}`;
     const r = await fetch(proxy);
     const json = await r.json();
     text = json.contents;
+    console.log('[fetchKline] proxy ok, preview:', text ? text.slice(0,80) : 'null');
   }
 
-  // Response: kline_dayqfq2025={...}  — find ={ and parse from {
-  const eqIdx = text.indexOf('={');
-  if (eqIdx < 0) throw new Error(`${symbol} 数据格式异常`);
+  // Response: kline_dayqfq2026={...}  — find ={ and parse from {
+  const eqIdx = text ? text.indexOf('={') : -1;
+  if (eqIdx < 0) throw new Error(`数据格式异常: ${text ? text.slice(0,60) : 'empty'}`);
   const data = JSON.parse(text.slice(eqIdx + 1));
-  if (!data.data || !data.data[full]) throw new Error(`${symbol} 暂无数据（${data.msg || '未知错误'}）`);
+  console.log('[fetchKline] parsed, code:', data.code, 'keys:', Object.keys(data.data||{}));
+  if (!data.data || !data.data[full]) throw new Error(`${symbol} 无数据 (msg: ${data.msg || 'none'}, data type: ${typeof data.data})`);
   const stockData = data.data[full];
   const rows = stockData.qfqday || stockData.day || stockData.hfqday || [];
 
@@ -554,7 +559,8 @@ createApp({
         saveWatchlist();
         selectStock(code);
       } catch(e) {
-        alert(`添加失败: ${e.message}\n请检查股票代码是否正确`);
+        console.error('[addStock] error:', e);
+        alert(`添加失败: ${e.message}\n\n股票代码: ${code}\n请打开浏览器控制台(F12→Console)查看详细错误`);
       } finally { loading.value = false; }
     }
 
